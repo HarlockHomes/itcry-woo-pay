@@ -92,6 +92,14 @@ class ITCRY_WOOPAY_Gateway_Easypay_QQ extends ITCRY_WOOPAY_Abstract_Gateway {
             $return_url .= '&out_trade_no=' . $order->get_id();
         }
 
+        // 从订单项目获取param
+        $custom_param = '';
+        $items = $order->get_items();
+        if (!empty($items)) {
+            $first_item = reset($items);
+            $custom_param = $first_item->get_meta('_param');
+        }
+
         $params = array(
             'pid'          => (int)$pid,
             'type'         => $type,
@@ -99,15 +107,18 @@ class ITCRY_WOOPAY_Gateway_Easypay_QQ extends ITCRY_WOOPAY_Abstract_Gateway {
             'notify_url'   => WC()->api_request_url('itcry_woo_pay_easypay_notify'),
             'return_url'   => $return_url,
             'name'         => $product_name,
-            'money'        => $final_payment_amount, // <-- 使用我们精确计算的最终金额
+            'money'        => $final_payment_amount,
             'sign_type'    => 'MD5',
-            'param'        => $index . '_' . uniqid(),
+            'param'        => $custom_param,
             'email'        => $order->get_billing_email()
         );
 
         $params['sign'] = $this->generate_easypay_sign( $params, $key );
 
         $pay_url = rtrim( $api_url, '/' ) . '/submit.php?' . http_build_query( $params );
+
+        // 存储接口索引到订单meta，方便回调时使用
+        $order->update_meta_data('_easypay_interface_index', $index);
 
         $order->add_order_note( sprintf( __( '用户选择了 %s 发起支付 (使用接口 #%d)，应付金额 %.2f（含手续费 %.2f）。', 'itcry-woo-pay' ), $this->method_title, $index + 1, $final_payment_amount, $fee_amount ) );
         

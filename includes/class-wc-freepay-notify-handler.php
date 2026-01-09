@@ -31,9 +31,22 @@ class ITCRY_WOOPAY_Notify_Handler {
         // 首先验证参数并更新订单状态（类似于通知处理）
         $params = wp_unslash( $_GET );
         
-        // 从param参数中提取接口索引
-        $param_parts = isset($params['param']) ? explode('_', $params['param']) : array();
-        $interface_index = isset($param_parts[0]) && is_numeric($param_parts[0]) ? intval($param_parts[0]) : -1;
+        // 获取订单ID
+        $order_id = isset($params['out_trade_no']) ? intval($params['out_trade_no']) : 0;
+        $order = wc_get_order($order_id);
+
+        if (!$order) {
+            wp_redirect(home_url());
+            exit;
+        }
+
+        // 从订单meta获取接口索引
+        $interface_index = (int) $order->get_meta('_easypay_interface_index');
+        
+        if (empty($interface_index) && $interface_index !== 0) {
+            wp_redirect(home_url());
+            exit;
+        }
         
         if ($interface_index !== -1) {
             // 获取接口配置
@@ -47,9 +60,6 @@ class ITCRY_WOOPAY_Notify_Handler {
                 if ($this->verify_easypay_sign($params, $key)) {
                     // 检查交易状态
                     if (isset($params['trade_status']) && $params['trade_status'] === 'TRADE_SUCCESS') {
-                        $order_id = isset($params['out_trade_no']) ? intval($params['out_trade_no']) : 0;
-                        $order = wc_get_order($order_id);
-
                         if ($order && $order->has_status('pending')) {
                             $transaction_id = isset($params['trade_no']) ? sanitize_text_field($params['trade_no']) : '';
                             $money_paid = isset($params['money']) ? (float)$params['money'] : 0.0;
@@ -203,8 +213,20 @@ class ITCRY_WOOPAY_Notify_Handler {
     public function handle_easypay_notify() {
         $params = wp_unslash( $_GET );
         
-        $param_parts = isset($params['param']) ? explode('_', $params['param']) : array();
-        $interface_index = isset($param_parts[0]) && is_numeric($param_parts[0]) ? intval($param_parts[0]) : -1;
+        // 先获取订单ID
+        $order_id = isset( $params['out_trade_no'] ) ? intval( $params['out_trade_no'] ) : 0;
+        $order = wc_get_order( $order_id );
+
+        if ( ! $order ) {
+            $this->log_and_die( 'Order not found for ID: ' . $order_id );
+        }
+
+        // 从订单meta获取接口索引
+        $interface_index = (int) $order->get_meta('_easypay_interface_index');
+        
+        if (empty($interface_index) && $interface_index !== 0) {
+            $this->log_and_die('Easypay notify error: Interface index not found in order meta.');
+        }
         
         if ($interface_index === -1) {
             $this->log_and_die('Easypay notify error: Missing interface index.');
@@ -224,13 +246,6 @@ class ITCRY_WOOPAY_Notify_Handler {
 
         if ( ! isset( $params['trade_status'] ) || $params['trade_status'] !== 'TRADE_SUCCESS' ) {
             $this->log_and_die( 'Trade status is not TRADE_SUCCESS.' );
-        }
-
-        $order_id = isset( $params['out_trade_no'] ) ? intval( $params['out_trade_no'] ) : 0;
-        $order = wc_get_order( $order_id );
-
-        if ( ! $order ) {
-            $this->log_and_die( 'Order not found for ID: ' . $order_id );
         }
 
         if ( ! $order->has_status( 'pending' ) ) {
