@@ -154,3 +154,52 @@ function itcry_woo_pay_plugin() {
 
 // 启动插件
 add_action( 'plugins_loaded', 'itcry_woo_pay_plugin', 0 );
+
+/**
+ * WooCommerce 区块结账支付方式注册
+ */
+add_action( 'woocommerce_blocks_payment_method_type_registration', 'itcry_woo_pay_register_block_payment_methods' );
+
+function itcry_woo_pay_register_block_payment_methods( $payment_method_registry ) {
+	$log_dir = ITCRY_WOOPAY_PATH . 'logs/';
+	if ( ! file_exists( $log_dir ) ) {
+		wp_mkdir_p( $log_dir );
+	}
+	$log_file = $log_dir . 'blocks-debug.log';
+
+	$log_message = function( $message ) use ( $log_file ) {
+		$time = date( 'Y-m-d H:i:s' );
+		file_put_contents( $log_file, "[{$time}] {$message}\n", FILE_APPEND );
+	};
+
+	$log_message( 'Registration function called' );
+
+	if ( ! class_exists( '\Automattic\WooCommerce\Blocks\Payments\Integrations\AbstractPaymentMethodType' ) ) {
+		$log_message( 'AbstractPaymentMethodType class does not exist' );
+		return;
+	}
+
+	require_once dirname( __FILE__ ) . '/includes/blocks/class-itcry-woo-pay-easypay-wx-block.php';
+
+	if ( method_exists( $payment_method_registry, 'register' ) ) {
+		$payment_method_registry->register( new ITCRY_WOOPAY_Easypay_WX_Block() );
+		$log_message( 'Payment method registered successfully' );
+	} else {
+		$log_message( 'register method does not exist' );
+	}
+}
+
+/**
+ * 声明区块兼容性
+ */
+add_action( 'before_woocommerce_init', 'itcry_woo_pay_declare_checkout_blocks_compatibility' );
+
+function itcry_woo_pay_declare_checkout_blocks_compatibility() {
+	if ( class_exists( '\Automattic\WooCommerce\Utilities\FeaturesUtil' ) ) {
+		\Automattic\WooCommerce\Utilities\FeaturesUtil::declare_compatibility(
+			'cart_checkout_blocks',
+			__FILE__,
+			true
+		);
+	}
+}
