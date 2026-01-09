@@ -1,8 +1,7 @@
 <?php
 /**
- * ITCRY WOOPAY - Easypay QQ Gateway
+ * ITCRY WOOPAY - Easypay QQ Pay Gateway
  */
-
 if ( ! defined( 'ABSPATH' ) ) {
 	exit; // Exit if accessed directly.
 }
@@ -20,9 +19,8 @@ class ITCRY_WOOPAY_Gateway_Easypay_QQ extends ITCRY_WOOPAY_Abstract_Gateway {
         $this->method_description = __( '使用易支付聚合接口进行QQ钱包付款。', 'itcry-woo-pay' );
 
         parent::__construct();
-        
-        // 添加操作以处理重定向并清理URL参数。
-        add_action('woocommerce_api_itcry_woo_pay_easypay_return', array($this, 'handle_return_url_and_redirect'));
+
+        // 移除了重复的钩子注册，现在由统一通知处理程序处理
     }
 
     /**
@@ -103,7 +101,8 @@ class ITCRY_WOOPAY_Gateway_Easypay_QQ extends ITCRY_WOOPAY_Abstract_Gateway {
             'name'         => $product_name,
             'money'        => $final_payment_amount, // <-- 使用我们精确计算的最终金额
             'sign_type'    => 'MD5',
-            'param'        => $index . '_' . uniqid()
+            'param'        => $index . '_' . uniqid(),
+            'email'        => $order->get_billing_email()
         );
 
         $params['sign'] = $this->generate_easypay_sign( $params, $key );
@@ -116,36 +115,8 @@ class ITCRY_WOOPAY_Gateway_Easypay_QQ extends ITCRY_WOOPAY_Abstract_Gateway {
 
         return $pay_url;
     }
-    
-    /**
-     * 处理来自Easypay的返回。
-     * 如果自定义返回URL为空，则重定向到订单接收页面。
-     */
-    public function handle_return_url_and_redirect() {
-        $options = get_option( 'itcry_woo_pay_easypay_settings', array() );
-        $final_url = '';
 
-        if ( ! empty( $options['easypay_return_url'] ) ) {
-            $final_url = esc_url_raw( $options['easypay_return_url'] );
-        } else {
-            $order_id = isset( $_GET['out_trade_no'] ) ? absint( $_GET['out_trade_no'] ) : 0;
-            if ( $order_id > 0 ) {
-                $order = wc_get_order( $order_id );
-                if ( $order ) {
-                    $final_url = $order->get_checkout_order_received_url();
-                }
-            }
-        }
-
-        if ( empty( $final_url ) ) {
-            $final_url = home_url();
-        }
-        
-        echo '<!DOCTYPE html><html><head><title>Redirecting...</title>';
-        echo '<script type="text/javascript">window.location.replace("' . esc_url_raw( $final_url ) . '");</script>';
-        echo '</head><body><p>Payment successful, redirecting...</p></body></html>';
-        exit;
-    }
+    // 移除了重复的 handle_return_url_and_redirect 方法，现在由统一通知处理程序处理
 
     private function get_product_name( $order ) {
         $items = $order->get_items();

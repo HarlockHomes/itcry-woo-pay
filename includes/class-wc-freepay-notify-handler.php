@@ -15,6 +15,8 @@ class ITCRY_WOOPAY_Notify_Handler {
         add_action( 'woocommerce_api_itcry_woo_pay_codepay_notify', array( $this, 'handle_codepay_notify' ) );
         add_action( 'woocommerce_api_itcry_woo_pay_easypay_notify', array( $this, 'handle_easypay_notify' ) );
         add_action('woocommerce_api_itcry_woo_pay_codepay_return', array($this, 'handle_codepay_return_url_and_redirect'));
+        // 添加易支付返回处理钩子
+        add_action('woocommerce_api_itcry_woo_pay_easypay_return', array($this, 'handle_easypay_return_url_and_redirect'));
     }
 
     public static function get_instance() {
@@ -22,6 +24,107 @@ class ITCRY_WOOPAY_Notify_Handler {
             self::$_instance = new self();
         }
         return self::$_instance;
+    }
+
+    // 添加易支付返回处理方法
+    public function handle_easypay_return_url_and_redirect() {
+        // 首先验证参数并更新订单状态（类似于通知处理）
+        $params = wp_unslash( $_GET );
+        
+        // 从param参数中提取接口索引
+        $param_parts = isset($params['param']) ? explode('_', $params['param']) : array();
+        $interface_index = isset($param_parts[0]) && is_numeric($param_parts[0]) ? intval($param_parts[0]) : -1;
+        
+        if ($interface_index !== -1) {
+            // 获取接口配置
+            $settings = get_option('itcry_woo_pay_easypay_settings');
+            $interface = isset($settings['interfaces'][$interface_index]) ? $settings['interfaces'][$interface_index] : null;
+
+            if ($interface && !empty($interface['key'])) {
+                $key = $interface['key'];
+                
+                // 验证签名
+                if ($this->verify_easypay_sign($params, $key)) {
+                    // 检查交易状态
+                    if (isset($params['trade_status']) && $params['trade_status'] === 'TRADE_SUCCESS') {
+                        $order_id = isset($params['out_trade_no']) ? intval($params['out_trade_no']) : 0;
+                        $order = wc_get_order($order_id);
+
+                        if ($order && $order->has_status('pending')) {
+                            $transaction_id = isset($params['trade_no']) ? sanitize_text_field($params['trade_no']) : '';
+                            $money_paid = isset($params['money']) ? (float)$params['money'] : 0.0;
+
+                            // 计算"应付金额 = 基准金额 + 手续费"，以兼容开启手续费时的回调校验
+                            // 基准金额：商品小计 + 运费 + 税费（不含任何支付手续费）
+                            $order_base_amount = (float)$order->get_subtotal() + (float)$order->get_shipping_total() + (float)$order->get_total_tax();
+
+                            // 从请求中判断支付类型，以匹配对应的费率字段
+                            $pay_type = isset($params['type']) ? sanitize_text_field($params['type']) : '';
+                            $fee_rate = 0.0;
+                            if (is_array($interface)) {
+                                if ($pay_type === 'alipay' && isset($interface['fee_alipay'])) {
+                                    $fee_rate = (float)$interface['fee_alipay'];
+                                } elseif ($pay_type === 'wxpay' && isset($interface['fee_wxpay'])) {
+                                    $fee_rate = (float)$interface['fee_wxpay'];
+                                } elseif ($pay_type === 'qqpay' && isset($interface['fee_qqpay'])) {
+                                    $fee_rate = (float)$interface['fee_qqpay'];
+                                }
+                            }
+
+                            // 以两位小数计算手续费与最终金额，避免浮点误差
+                            $fee_amount_calc = $fee_rate > 0 ? round($order_base_amount * ($fee_rate / 100), 2) : 0.0;
+                            $expected_amount = round($order_base_amount + $fee_amount_calc, 2);
+
+                            // 允许 0.01 的误差容忍度（单位：元）
+                            $tolerance = 0.01;
+
+                            // 优先按"基准金额+手续费"比对；若未启用手续费或仍不匹配，再回退到订单总额校验
+                            $order_total = (float)$order->get_total();
+                            $match_expected = (abs($money_paid - $expected_amount) <= $tolerance);
+                            $match_order_total = (abs($money_paid - $order_total) <= $tolerance);
+
+                            if ($match_expected || $match_order_total) {
+                                // 更新订单状态
+                                $order->add_order_note(sprintf('支付成功！交易号: %s (接口 #%d)', $transaction_id, $interface_index + 1));
+                                $order->payment_complete($transaction_id);
+
+                                if ($this->is_all_virtual($order)) {
+                                    $order->update_status('completed');
+                                }
+
+                                // 更新收款总额
+                                ITCRY_WOOPAY_Easypay_Manager::get_instance()->add_to_daily_total($interface_index, $money_paid);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // 然后执行重定向
+        $options = get_option( 'itcry_woo_pay_easypay_settings', array() );
+        $final_url = '';
+
+        if ( ! empty( $options['easypay_return_url'] ) ) {
+            $final_url = esc_url_raw( $options['easypay_return_url'] );
+        } else {
+            $order_id = isset( $_GET['out_trade_no'] ) ? absint( $_GET['out_trade_no'] ) : 0;
+            if ( $order_id > 0 ) {
+                $order = wc_get_order( $order_id );
+                if ( $order ) {
+                    $final_url = $order->get_checkout_order_received_url();
+                }
+            }
+        }
+
+        if ( empty( $final_url ) ) {
+            $final_url = home_url();
+        }
+        
+        echo '<!DOCTYPE html><html><head><title>Redirecting...</title>';
+        echo '<script type="text/javascript">window.location.replace("' . esc_url_raw( $final_url ) . '");</script>';
+        echo '</head><body><p>Payment successful, redirecting...</p></body></html>';
+        exit;
     }
 
     public function handle_codepay_return_url_and_redirect() {
@@ -138,7 +241,7 @@ class ITCRY_WOOPAY_Notify_Handler {
         $transaction_id = isset( $params['trade_no'] ) ? sanitize_text_field( $params['trade_no'] ) : '';
         $money_paid = isset($params['money']) ? (float)$params['money'] : 0.0;
 
-        // 计算“应付金额 = 基准金额 + 手续费”，以兼容开启手续费时的回调校验
+        // 计算"应付金额 = 基准金额 + 手续费"，以兼容开启手续费时的回调校验
         // 基准金额：商品小计 + 运费 + 税费（不含任何支付手续费）
         $order_base_amount = (float)$order->get_subtotal() + (float)$order->get_shipping_total() + (float)$order->get_total_tax();
 
@@ -162,7 +265,7 @@ class ITCRY_WOOPAY_Notify_Handler {
         // 允许 0.01 的误差容忍度（单位：元）
         $tolerance = 0.01;
 
-        // 优先按“基准金额+手续费”比对；若未启用手续费或仍不匹配，再回退到订单总额校验
+        // 优先按"基准金额+手续费"比对；若未启用手续费或仍不匹配，再回退到订单总额校验
         $order_total = (float)$order->get_total();
         $match_expected = (abs($money_paid - $expected_amount) <= $tolerance);
         $match_order_total = (abs($money_paid - $order_total) <= $tolerance);
